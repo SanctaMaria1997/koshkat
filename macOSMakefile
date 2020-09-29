@@ -1,0 +1,59 @@
+GHC_DEBUG_FLAGS=
+GHC_RELEASE_FLAGS=-O3
+GCC_DEBUG_FLAGS=-g
+GCC_RELEASE_FLAGS=-O3
+GHC_FLAGS=
+GCC_FLAGS=
+
+KOSHKAT_HOME=\"/usr/local/bin/koshkat-tools\"
+KOSHKAT_LIBS=\"/usr/local/lib\"
+KOSHKAT_DOCS=\"/usr/share/doc/koshkat-tools\"
+
+.PHONY: debug
+debug: GHC_FLAGS+=${GHC_DEBUG_FLAGS}
+debug: GCC_FLAGS+=${GCC_DEBUG_FLAGS}
+debug: build
+
+.PHONY: release
+release: GHC_FLAGS+=${GHC_RELEASE_FLAGS}
+release: GCC_FLAGS+=${GCC_RELEASE_FLAGS}
+release: build
+
+build: koshkat libkoshka.core.dylib libkoshka.mm.dylib
+
+# for profiling add: -prof -fprof-auto 
+koshkat: Main.hs Arguments.hs Assembler.hs Lexer.hs Parser.hs Semantics.hs Compiler.hs DWARF.hs Linker.hs LexerData.hs ParserData.hs SemanticsData.hs CompilerData.hs StandardFunctions.hs Options.hs Common.hs
+	ghc Main.hs -o koshkat -DMAC_OS=1 -DKOSHKAT_HOME=${KOSHKAT_HOME} ${GHC_FLAGS}
+
+libkoshka.core.dylib: libkoshka_core.o quacks_like_glib.o
+	gcc -shared -o libkoshka.core.dylib libkoshka_core.o quacks_like_glib.o -framework Foundation -lm ${GCC_FLAGS}
+
+libkoshka_core.o: libkoshka_core.c libkoshka_core.h
+	gcc -ObjC -fobjc-arc -c libkoshka_core.c -DMAC_OS=1 -o libkoshka_core.o -fpic ${GCC_FLAGS}
+
+libkoshka.mm.dylib: libkoshka_mm.o libkoshka_core.o libkoshka_mm.o libkoshka_mm_graphics.o libkoshka_mm_sound.o libkoshka_mm_io.o libkoshka_mm_text.o quacks_like_glib.o libkoshka.core.dylib libkoshka.core.dylib
+	gcc -shared -o libkoshka.mm.dylib libkoshka_mm.o libkoshka_mm_graphics.o libkoshka_mm_sound.o libkoshka_mm_io.o libkoshka_mm_text.o quacks_like_glib.o -L. -lkoshka.core -framework Cocoa -framework SDL2 -framework SDL2_image -framework SDL2_mixer -framework SDL2_ttf -lSDL2_gfx -F/Library/Frameworks -lm ${GCC_FLAGS}
+
+libkoshka_mm.o: libkoshka_mm.c libkoshka_mm.h
+	gcc -c libkoshka_mm.c -DMAC_OS=1 -o libkoshka_mm.o -I/usr/local/include -fpic ${GCC_FLAGS}
+
+libkoshka_mm_graphics.o: libkoshka_mm_graphics.c libkoshka_mm.h
+	gcc -ObjC -I/usr/local/include/ -I. -c libkoshka_mm_graphics.c -DMAC_OS=1 -o libkoshka_mm_graphics.o -fpic ${GCC_FLAGS}
+
+libkoshka_mm_sound.o: libkoshka_mm_sound.c
+	gcc -c libkoshka_mm_sound.c -DMAC_OS=1 -o libkoshka_mm_sound.o -I/usr/local/include -fpic ${GCC_FLAGS}
+
+libkoshka_mm_io.o: libkoshka_mm_io.c libkoshka_mm_io.h
+	gcc -c libkoshka_mm_io.c -DMAC_OS=1 -o libkoshka_mm_io.o -I/usr/local/include -fpic ${GCC_FLAGS}
+
+libkoshka_mm_text.o: libkoshka_mm_text.c libkoshka_mm.h
+	gcc -c libkoshka_mm_text.c -DMAC_OS=1 -o libkoshka_mm_text.o -I/usr/local/include -fpic ${GCC_FLAGS}
+
+quacks_like_glib.o: quacks_like_glib.c quacks_like_glib.h
+	gcc -c quacks_like_glib.c -DMAC_OS=1 -o quacks_like_glib.o -fpic ${GCC_FLAGS}
+
+install:
+	-./ktool-install-macos.sh ${KOSHKAT_HOME} ${KOSHKAT_LIBS} ${KOSHKAT_DOCS}
+
+clean:
+	-rm -rf *.o *.dylib *.hi koshkat

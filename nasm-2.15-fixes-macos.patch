@@ -1,0 +1,557 @@
+diff --git a/asm/assemble.c b/asm/assemble.c
+index e5d5682c..e7bf3dba 100644
+--- a/asm/assemble.c
++++ b/asm/assemble.c
+@@ -243,7 +243,6 @@ static int rexflags(int, opflags_t, int);
+ static int op_rexflags(const operand *, int);
+ static int op_evexflags(const operand *, int, uint8_t);
+ static void add_asp(insn *, int);
+-
+ static enum ea_type process_ea(operand *, ea *, int, int,
+                                opflags_t, insn *, const char **);
+ 
+@@ -339,6 +338,7 @@ static void warn_overflow_out(int64_t data, int size, enum out_sign sign)
+  *!  this. Instead, this will be replaced with explicit zero
+  *!  content, which may produce a large output file.
+  */
++
+ static void out(struct out_data *data)
+ {
+     static int32_t lineno = 0;     /* static!!! */
+@@ -352,7 +352,7 @@ static void out(struct out_data *data)
+     int64_t addrval;
+     int32_t fixseg;             /* Segment for which to produce fixed data */
+ 
+-    if (!data->size)
++    if (!data->size && data->type != OUT_RELOC)
+         return;                 /* Nothing to do */
+ 
+     /*
+@@ -376,6 +376,7 @@ static void out(struct out_data *data)
+         amax = ofmt->maxbits >> 3; /* Maximum address size in bytes */
+         if ((ofmt->flags & OFMT_KEEP_ADDR) == 0 && data->tsegment == fixseg &&
+             data->twrt == NO_SEG) {
++
+             if (asize >= (size_t)(data->bits >> 3))
+                 data->sign = OUT_WRAP; /* Support address space wrapping for low-bit modes */
+             warn_overflow_out(addrval, asize, data->sign);
+@@ -386,6 +387,10 @@ static void out(struct out_data *data)
+         }
+         break;
+ 
++    case OUT_RELOC:
++        
++        break;
++        
+     case OUT_SEGMENT:
+         nasm_assert(data->size <= 8);
+         asize = data->size;
+@@ -539,6 +544,22 @@ static void out_reladdr(struct out_data *data, const struct operand *opx,
+     out(data);
+ }
+ 
++static void out_reloc(struct out_data *data, const struct operand *opx)
++{
++    data->type = OUT_RELOC;
++    data->sign = OUT_UNSIGNED;
++    data->size = 0;
++    data->itemp = 0;
++    data->bits = globalbits;
++    data->insoffs = 0;
++    data->inslen = 0;
++    data->offset = opx[0].offset;
++    data->tsegment = opx->segment;
++    data->twrt = opx->wrt;
++    data->relbase = 0;
++    out(data);
++}
++
+ static bool jmp_match(int32_t segment, int64_t offset, int bits,
+                       insn * ins, const struct itemplate *temp)
+ {
+@@ -812,7 +833,10 @@ int64_t assemble(int32_t segment, int64_t start, int bits, insn *instruction)
+     done:
+         instruction->times = 1; /* Tell the upper layer not to iterate */
+         ;
+-    } else {
++    } else if (instruction->opcode == I_RELOC){
++        out_reloc(&data,&instruction->oprs[0]);
++      }
++      else {
+         /* "Real" instruction */
+ 
+         /* Check to see if we need an address-size prefix */
+@@ -1044,7 +1068,7 @@ static void define_equ(insn * instruction)
+                instruction->oprs[0].wrt == NO_SEG) {
+         define_label(instruction->label,
+                      instruction->oprs[0].segment,
+-                     instruction->oprs[0].offset, false);
++                     instruction->oprs[0].offset, false,true);
+     } else if (instruction->operands == 2
+                && (instruction->oprs[0].type & IMMEDIATE)
+                && (instruction->oprs[0].type & COLON)
+@@ -1055,7 +1079,7 @@ static void define_equ(insn * instruction)
+                && instruction->oprs[1].wrt == NO_SEG) {
+         define_label(instruction->label,
+                      instruction->oprs[0].offset | SEG_ABS,
+-                     instruction->oprs[1].offset, false);
++                     instruction->oprs[1].offset, false,true);
+     } else {
+         nasm_nonfatal("bad syntax for EQU");
+     }
+@@ -1845,7 +1869,6 @@ static void gencode(struct out_data *data, insn *ins)
+     const char *errmsg;
+ 
+     ins->rex_done = false;
+-
+     emit_prefix(data, bits, ins);
+ 
+     while (*codes) {
+@@ -1916,6 +1939,7 @@ static void gencode(struct out_data *data, insn *ins)
+                 if (delta > 127 || delta < -128)
+                     nasm_nonfatal("short jump is out of range");
+             }
++            
+             out_reladdr(data, opx, 1);
+             break;
+ 
+@@ -1924,6 +1948,7 @@ static void gencode(struct out_data *data, insn *ins)
+             break;
+ 
+         case4(060):
++            
+             out_reladdr(data, opx, 2);
+             break;
+ 
+@@ -1937,6 +1962,7 @@ static void gencode(struct out_data *data, insn *ins)
+             break;
+ 
+         case4(070):
++            
+             out_reladdr(data, opx, 4);
+             break;
+ 
+diff --git a/asm/directiv.c b/asm/directiv.c
+index 53422098..fdfc386f 100644
+--- a/asm/directiv.c
++++ b/asm/directiv.c
+@@ -360,7 +360,7 @@ bool process_directives(char *directive)
+             break;
+         
+         if (type == LBL_COMMON || type == LBL_EXTERN || type == LBL_REQUIRED)
+-            define_label(value, 0, size, false);
++            define_label(value, 0, size, false, false);
+ 
+     	break;
+     }
+diff --git a/asm/labels.c b/asm/labels.c
+index f6b940fc..81d07594 100644
+--- a/asm/labels.c
++++ b/asm/labels.c
+@@ -112,6 +112,7 @@ union label {                   /* actual label structures */
+         char *label, *mangled, *special;
+         const char *def_file;   /* Where defined */
+         int32_t def_line;
++        bool discardable;
+         enum label_type type, mangled_type;
+     } defn;
+     struct {
+@@ -145,6 +146,7 @@ static const char *mangle_label_name(union label *lptr);
+ static const char *prevlabel;
+ 
+ static bool initialized = false;
++extern bool discard_labels;
+ 
+ /*
+  * Emit a symdef to the output and the debug format backends.
+@@ -202,9 +204,10 @@ static void out_symdef(union label *lptr)
+     /* Might be necessary for a backend symbol */
+     mangle_label_name(lptr);
+ 
+-    ofmt->symdef(lptr->defn.mangled, lptr->defn.segment,
+-                 backend_offset, backend_type,
+-                 lptr->defn.special);
++    if(discard_labels == false || lptr->defn.discardable == false)
++      ofmt->symdef(lptr->defn.mangled, lptr->defn.segment,
++                   backend_offset, backend_type,
++                   lptr->defn.special);
+ 
+     /*
+      * NASM special symbols are not passed to the debug format; none
+@@ -440,7 +443,7 @@ bool declare_label(const char *label, enum label_type type, const char *special)
+  * base name or not.
+  */
+ void define_label(const char *label, int32_t segment,
+-                  int64_t offset, bool normal)
++                  int64_t offset, bool normal,bool discardable)
+ {
+     union label *lptr;
+     bool created, changed;
+@@ -556,6 +559,7 @@ void define_label(const char *label, int32_t segment,
+     lptr->defn.offset  = offset;
+     lptr->defn.size    = size;
+     lptr->defn.defined = lpass;
++    lptr->defn.discardable = discardable;
+ 
+     if (changed || lastdef != lpass)
+         src_get(&lptr->defn.def_line, &lptr->defn.def_file);
+@@ -572,7 +576,7 @@ void backend_label(const char *label, int32_t segment, int64_t offset)
+     if (!declare_label(label, LBL_BACKEND, NULL))
+         return;
+ 
+-    define_label(label, segment, offset, false);
++    define_label(label, segment, offset, false, false);
+ }
+ 
+ int init_labels(void)
+diff --git a/asm/nasm.c b/asm/nasm.c
+index 7c64569f..5ac3aac8 100644
+--- a/asm/nasm.c
++++ b/asm/nasm.c
+@@ -100,6 +100,7 @@ static const char *debug_format;
+ #endif
+ static bool abort_on_panic = ABORT_ON_PANIC;
+ static bool keep_all;
++bool discard_labels = false;
+ 
+ bool tasm_compatible_mode = false;
+ enum pass_type _pass_type;
+@@ -197,7 +198,7 @@ static const struct limit_info limit_info[LIMIT_MAX+1] = {
+     { "eval", "expression evaluation descent", 8192 },
+     { "lines", "total source lines processed", 2000000000 }
+ };
+-
++ 
+ static void set_default_limits(void)
+ {
+     int i;
+@@ -935,6 +936,7 @@ enum text_options {
+     OPT_BEFORE,
+     OPT_LIMIT,
+     OPT_KEEP_ALL,
++    OPT_DISCARD_LABELS,
+     OPT_NO_LINE,
+     OPT_DEBUG
+ };
+@@ -966,6 +968,7 @@ static const struct textargs textopts[] = {
+     {"before",   OPT_BEFORE,  ARG_YES, 0},
+     {"limit-",   OPT_LIMIT,   ARG_YES, 0},
+     {"keep-all", OPT_KEEP_ALL, ARG_NO, 0},
++    {"discard-labels", OPT_DISCARD_LABELS, ARG_NO, 0},
+     {"no-line",  OPT_NO_LINE, ARG_NO, 0},
+     {"debug",    OPT_DEBUG, ARG_MAYBE, 0},
+     {NULL, OPT_BOGUS, ARG_NO, 0}
+@@ -1324,6 +1327,9 @@ static bool process_arg(char *p, char *q, int pass)
+                 case OPT_KEEP_ALL:
+                     keep_all = true;
+                     break;
++                case OPT_DISCARD_LABELS:
++                    discard_labels = true;
++                    break;
+                 case OPT_NO_LINE:
+                     pp_noline = true;
+                     break;
+diff --git a/asm/parser.c b/asm/parser.c
+index de24103e..1c502571 100644
+--- a/asm/parser.c
++++ b/asm/parser.c
+@@ -699,7 +699,7 @@ restart_parse:
+              */
+             define_label(result->label,
+                          in_absolute ? absolute.segment : location.segment,
+-                         location.offset, true);
++                         location.offset, true, result->label[0] == '.');
+         }
+     }
+ 
+@@ -826,7 +826,8 @@ restart_parse:
+              * Throw the instruction away.
+              */
+             goto fail;
+-        } else {
++        } 
++          else {
+             /* DB et al */
+             result->operands = oper_num;
+             if (oper_num == 0)
+@@ -834,7 +835,23 @@ restart_parse:
+         }
+         return result;
+     }
++    else if (result->opcode == I_RELOC) {
++   
++        int oper_num;
++
++        i = stdscan(NULL, &tokval);
++        
++        oper_num = parse_eops(&result->eops, critical,0);
+ 
++        if(oper_num != 1)
++          nasm_fatal("'reloc' expects one argument");
++          
++        result->operands = 1;
++        result->oprs[0].segment = location.segment;
++        result->oprs[0].offset = location.offset;
++
++        return result;
++    }
+     /*
+      * Now we begin to parse the operands. There may be up to four
+      * of these, separated by commas, and terminated by a zero token.
+diff --git a/include/labels.h b/include/labels.h
+index a825d1ff..7d8dd1b1 100644
+--- a/include/labels.h
++++ b/include/labels.h
+@@ -65,7 +65,7 @@ static inline bool is_extern(enum label_type type)
+     return type == LBL_EXTERN || type == LBL_REQUIRED;
+ }
+ void define_label(const char *label, int32_t segment, int64_t offset,
+-                  bool normal);
++                  bool normal,bool discardable);
+ void backend_label(const char *label, int32_t segment, int64_t offset);
+ bool declare_label(const char *label, enum label_type type,
+                    const char *special);
+diff --git a/include/nasm.h b/include/nasm.h
+index 046f5fb9..29e34bf3 100644
+--- a/include/nasm.h
++++ b/include/nasm.h
+@@ -98,6 +98,7 @@ enum out_type {
+     OUT_ADDRESS,    /* An address (symbol value) */
+     OUT_RELADDR,    /* A relative address */
+     OUT_SEGMENT,    /* A segment number */
++    OUT_RELOC,      /* An explicit relocation */
+ 
+     /*
+      * These values are used by the legacy backend interface only;
+diff --git a/output/legacy.c b/output/legacy.c
+index 39793205..23b26900 100644
+--- a/output/legacy.c
++++ b/output/legacy.c
+@@ -86,7 +86,12 @@ void nasm_do_legacy_output(const struct out_data *data)
+         dptr = &data->toffset;
+         size = data->relbase - data->offset;
+         break;
+-
++    case OUT_RELOC:
++        dptr = &data->offset;
++        tsegment = data->segment;
++        size = 8;
++        break;
++        
+     case OUT_SEGMENT:
+         type = OUT_ADDRESS;
+         dptr = zero_buffer;
+diff --git a/output/outbin.c b/output/outbin.c
+index 29659f00..aeafab52 100644
+--- a/output/outbin.c
++++ b/output/outbin.c
+@@ -1189,11 +1189,11 @@ static void bin_define_section_labels(void)
+ 
+         /* section.<name>.start */
+         strcpy(label_name + base_len, ".start");
+-        define_label(label_name, sec->start_index, 0L, false);
++        define_label(label_name, sec->start_index, 0L, false, false);
+ 
+         /* section.<name>.vstart */
+         strcpy(label_name + base_len, ".vstart");
+-        define_label(label_name, sec->vstart_index, 0L, false);
++        define_label(label_name, sec->vstart_index, 0L, false, false);
+ 
+         nasm_free(label_name);
+     }
+diff --git a/output/outieee.c b/output/outieee.c
+index 4cc0f0f5..a650b492 100644
+--- a/output/outieee.c
++++ b/output/outieee.c
+@@ -790,9 +790,9 @@ static int32_t ieee_segment(char *name, int *bits)
+ 
+         ieee_seg_needs_update = seg;
+         if (seg->align >= SEG_ABS)
+-            define_label(name, NO_SEG, seg->align - SEG_ABS, false);
++            define_label(name, NO_SEG, seg->align - SEG_ABS, false, false);
+         else
+-            define_label(name, seg->index + 1, 0L, false);
++            define_label(name, seg->index + 1, 0L, false, false);
+         ieee_seg_needs_update = NULL;
+ 
+         if (seg->use32)
+diff --git a/output/outmacho.c b/output/outmacho.c
+index 08147883..1ef6c976 100644
+--- a/output/outmacho.c
++++ b/output/outmacho.c
+@@ -440,7 +440,9 @@ static int64_t add_reloc(struct section *sect, int32_t section,
+ 	    /* external */
+ 	    r->snum = raa_read(extsyms, section);
+ 	} else {
++	    
+ 	    /* local */
++	    
+ 	    r->ext = 0;
+ 	    r->snum = fi;
+ 	}
+@@ -448,6 +450,7 @@ static int64_t add_reloc(struct section *sect, int32_t section,
+ 
+     case RL_REL:
+     case RL_BRANCH:
++
+ 	r->type = fmt.reloc_rel;
+ 	r->pcrel = 1;
+ 	if (section == NO_SEG) {
+@@ -455,11 +458,13 @@ static int64_t add_reloc(struct section *sect, int32_t section,
+ 	    r->ext = 0;
+ 	} else if (fi == NO_SECT) {
+ 	    /* external */
++	    
+ 	    sect->extreloc = 1;
+ 	    r->snum = raa_read(extsyms, section);
+ 	    if (reltype == RL_BRANCH)
+ 		r->type = X86_64_RELOC_BRANCH;
+ 	} else {
++	    
+ 	    /* local */
+ 	    r->ext = 0;
+ 	    r->snum = fi;
+@@ -544,6 +549,44 @@ static int64_t add_reloc(struct section *sect, int32_t section,
+     return 0;
+ }
+ 
++static void add_explicit_reloc(struct section *sect, int32_t section,
++  int64_t offset,enum reltype reltype, int bytes)
++{
++    struct reloc *r;
++    struct section *s;
++    int32_t fi;
++    int64_t adjust;
++
++    r = nasm_malloc(sizeof(struct reloc));
++
++    adjust = 0;
++
++    r->length = ilog2_32(bytes);
++
++    r->type = fmt.reloc_abs;
++    r->pcrel = 0;
++    r->snum = R_ABS;
++
++    s = get_section_by_index(section);
++    fi = s ? s->fileindex : NO_SECT;
++
++    r->addr = offset;
++    r->ext = 0;
++	   r->snum = fi;
++    
++    if (r->pcrel)
++	     adjust += ((r->ext && fmt.ptrsize == 8) ? bytes : -(int64_t)sect->size);
++
++    r->next = sect->relocs;
++    sect->relocs = r;
++    if (r->ext)
++	     sect->extreloc = 1;
++    ++sect->nreloc;
++
++    return;
++}
++
++
+ static void macho_output(int32_t secto, const void *data,
+ 			 enum out_type type, uint64_t size,
+                          int32_t section, int32_t wrt)
+@@ -655,6 +698,7 @@ static void macho_output(int32_t secto, const void *data,
+ 		       " this use of WRT");
+ 	    wrt = NO_SEG;	/* we can at least _try_ to continue */
+ 	} else {
++	    
+ 	    addr += add_reloc(s, section, addr+size, RL_REL,
+                               type == OUT_REL1ADR ? 1 : 2);
+ 	}
+@@ -665,17 +709,17 @@ static void macho_output(int32_t secto, const void *data,
+ 
+     case OUT_REL4ADR:
+     case OUT_REL8ADR:
+-
++        
+         p = mydata;
+-	offset = *(int64_t *)data;
++	       offset = *(int64_t *)data;
+         addr = offset - size;
+-	reltype = RL_REL;
++	       reltype = RL_REL;
+ 
+         if (section != NO_SEG && section % 2) {
+             nasm_error(ERR_NONFATAL, "Mach-O format does not support"
+ 		       " section base references");
+         } else if (wrt == NO_SEG) {
+-	    if (fmt.ptrsize == 8 &&
++          if (fmt.ptrsize == 8 &&
+ 		(s->flags & S_ATTR_SOME_INSTRUCTIONS)) {
+ 		uint8_t opcode[2];
+ 
+@@ -717,13 +761,20 @@ static void macho_output(int32_t secto, const void *data,
+ 		       " this use of WRT");
+ 	    /* continue with RL_REL */
+ 	}
+-
+-	addr += add_reloc(s, section, offset, reltype,
++    
++        addr += add_reloc(s, section, offset, reltype,
+                           type == OUT_REL4ADR ? 4 : 8);
+         WRITELONG(p, addr);
+         sect_write(s, mydata, type == OUT_REL4ADR ? 4 : 8);
+         break;
+-
++       
++    case OUT_RELOC:
++        
++      reltype = RL_ABS;
++      offset = *((int64_t*)data);
++      add_explicit_reloc(s,(get_section_by_name("__TEXT", "__text"))->index,offset, reltype,8);
++      break;
++        
+     default:
+         nasm_error(ERR_NONFATAL, "Unrepresentable relocation in Mach-O");
+         break;
+@@ -748,6 +799,14 @@ static const struct macho_known_section {
+     { ".debug_info",    "__DWARF",  "__debug_info",     S_ATTR_DEBUG    },
+     { ".debug_line",    "__DWARF",  "__debug_line",     S_ATTR_DEBUG    },
+     { ".debug_str",     "__DWARF",  "__debug_str",      S_ATTR_DEBUG    },
++    { ".debug_frame",     "__DWARF",  "__debug_frame",      S_ATTR_DEBUG    },
++    { ".debug_pubnames",     "__DWARF",  "__debug_pubnames",      S_ATTR_DEBUG    },
++    { ".debug_pubtypes",     "__DWARF",  "__debug_pubtypes",      S_ATTR_DEBUG    },
++    { ".debug_aranges",     "__DWARF",  "__debug_aranges",      S_ATTR_DEBUG    },
++    { ".apple_names",     "__DWARF",  "__apple_names",      S_ATTR_DEBUG    },
++    { ".apple_objc",     "__DWARF",  "__apple_objc",      S_ATTR_DEBUG    },
++    { ".apple_namespac",     "__DWARF",  "__apple_namespac",      S_ATTR_DEBUG    },
++    { ".apple_types",     "__DWARF",  "__apple_types",      S_ATTR_DEBUG    },
+ };
+ 
+ /* Section type or attribute directives */
+diff --git a/output/outobj.c b/output/outobj.c
+index 0d4d3110..1e1caea1 100644
+--- a/output/outobj.c
++++ b/output/outobj.c
+@@ -1516,9 +1516,9 @@ static int32_t obj_segment(char *name, int *bits)
+ 
+         obj_seg_needs_update = seg;
+         if (seg->align >= SEG_ABS)
+-            define_label(name, NO_SEG, seg->align - SEG_ABS, false);
++            define_label(name, NO_SEG, seg->align - SEG_ABS, false, false);
+         else
+-            define_label(name, seg->index + 1, 0L, false);
++            define_label(name, seg->index + 1, 0L, false, false);
+         obj_seg_needs_update = NULL;
+ 
+         /*
+diff --git a/x86/insns.dat b/x86/insns.dat
+index a59c5306..af1ed880 100644
+--- a/x86/insns.dat
++++ b/x86/insns.dat
+@@ -66,7 +66,8 @@ REST		imm				[	resb]					8086
+ RESO		imm				[	resb]					8086
+ RESY		imm				[	resb]					8086
+ RESZ		imm				[	resb]					8086
+-INCBIN		ignore				ignore						ignore
++INCBIN		ignore				ignore	                ignore
++RELOC       ignore              ignore                  ignore
+ 
+ ;# Conventional instructions
+ AAA		void				[	37]					8086,NOLONG
