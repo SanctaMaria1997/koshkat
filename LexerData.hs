@@ -92,6 +92,7 @@ data TokenID =
   TOKEN_TYPE |
   TOKEN_FIELD |
   TOKEN_END_TYPE |
+  TOKEN_STOP |
   TOKEN_END |
 
   TOKEN_AND |
@@ -265,6 +266,7 @@ keywordMap =
      keyword TOKEN_FIRST "first",
      keyword TOKEN_LAST "last",
      keyword TOKEN_END "end",
+     keyword TOKEN_STOP "stop",
 
      keyword TOKEN_ASM "asm",
      keyword TOKEN_ASM_DATA "asmdata",

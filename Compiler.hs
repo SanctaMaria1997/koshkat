@@ -338,6 +338,7 @@ compileCode (Statement {statementContents = statements})
                                  STATEMENT_CONST -> compileConst
                                  STATEMENT_GLOBAL -> compileGlobal
                                  STATEMENT_LOCAL -> compileLocal
+                                 STATEMENT_STOP -> compileStop
                                  STATEMENT_END -> compileEnd
                                  STATEMENT_TYPE -> compileNothing
                                  STATEMENT_INSERT_BEFORE -> compileInsert
@@ -2534,6 +2535,15 @@ putEndFunction =
         "mov rcx, [rsp]\n",
         "call [" ++ osFunctionPrefix ++ "exit " ++ wrtGOT ++ "]\n"]
 #endif
+
+compileStop :: Statement -> CodeTransformation ()
+compileStop statement =
+  do debug <- gets (optionDebug . configOptions . compileStateConfig)
+     putDebugAnnotation (statementLineNumber statement)
+     if debug
+     then putAsm
+            ["int3\n\n"]
+     else return ()
 
 #if LINUX==1 || MAC_OS==1
 compileEnd :: Statement -> CodeTransformation ()

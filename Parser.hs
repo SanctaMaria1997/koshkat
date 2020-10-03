@@ -170,6 +170,7 @@ parseCode statements acceptNewlines =
                           TOKEN_INSERT -> parseInsert
                           TOKEN_DELETE -> parseDelete
                           TOKEN_DELETE_EACH -> parseDeleteEach
+                          TOKEN_STOP -> parseStop
                           TOKEN_END -> parseTopLevelExpression
                           _ -> throwParseError ("Unexpected token '" ++ tokenValue token ++ "'.") token
 
@@ -527,6 +528,12 @@ parseDeleteEach =
   do token <- popToken
      typeName <- requireCode (parseExpression [EXPRESSION_IDENTIFIER]) "Expecting expression."
      return (createStatement STATEMENT_DELETE_EACH token [typeName])
+
+parseStop :: CodeTransformation Statement
+parseStop =
+
+  do stopToken <- popToken
+     return (createStatement STATEMENT_STOP stopToken [])             
 
 parseEnd :: CodeTransformation Statement
 parseEnd =
