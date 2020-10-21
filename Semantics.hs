@@ -180,7 +180,7 @@ semanticsPushIncludeFileName fileName =
      debugInfo <- gets semanticStateDebugInfo
      let files = debugInfoFiles debugInfo
          size = Map.size files
-         newFiles = Map.insert fileName (size + 1) files
+         newFiles = Map.insert fileName size files
 
      put $ state {semanticStateDebugInfo =
                     debugInfo
